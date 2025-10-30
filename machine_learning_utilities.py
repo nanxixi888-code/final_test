@@ -15,48 +15,44 @@ except ImportError:
     from dataclasses import dataclass
     @dataclass
     class Rollout:
+        # 这是我们为 Part 1 & 2 修改后的完整数据结构
         q_mes_all: List[List[float]]
         qd_mes_all: List[List[float]]
         tau_mes_all: List[List[float]]
+        q_d_all: List[List[float]]
+        qd_d_all: List[List[float]]
+        final_target_pos_all: List[List[float]]
 
 
 class DatasetPreparator:
     
-    # --- 这是修改后的函数 ---
+    # --- Part 1 函数 (最终版) ---
     @staticmethod
     def extract_torque_prediction_features_and_targets(loaded_rollouts: List[Rollout]):
-        
-        # 1. 你的函数现在接收一个列表 (loaded_rollouts)，而不是一个字典
         
         all_input_features = []
         all_output_targets = []
 
-        # 2. 遍历列表中的每一个 rollout (即 data_0.pkl, data_1.pkl...)
         for rollout in loaded_rollouts:
             
-            # 3. 提取数据
-            # 我们从 Rollout 对象中获取数据 (使用 . 属性, 而不是 ['key'])
-            q_mes = np.array(rollout.q_mes_all)    # (N, 7) 当前角度  [cite: 18-20, 23, 198-203]
-            qd_mes = np.array(rollout.qd_mes_all)   # (N, 7) 当前速度  [cite: 18, 21, 23, 198-203]
-            tau_mes = np.array(rollout.tau_mes_all) # (N, 7) 当前力矩  [cite: 18, 22-23, 198-203]
+            # --- 提取 Part 1 所需数据 ---
+            # 感谢我们修复了 data_generator, 我们现在有 q_d_all (q_des) 了!
+            q_mes = np.array(rollout.q_mes_all)    
+            q_des = np.array(rollout.q_d_all)      
+            tau_mes = np.array(rollout.tau_mes_all) 
 
-            # 4. !! 定义新的特征 !!
-            # 因为 q_des (目标角度) 在教授的 .pkl 文件中缺失了, 
-            # 我们无法计算 "joint_angle_error" (你原来的代码)。
-            # 我们使用 [角度, 速度] (共14维) 作为输入来替代。
+            # --- 定义 Part 1 特征 (符合 PDF 要求) ---
+            # 输入: "current angle error" (q_des - q_mes) [cite: 55-56]
+            input_features = q_des - q_mes
             
-            input_features = np.hstack((q_mes, qd_mes)) # (N, 14)
+            # 输出: "Torque commands" [cite: 59]
+            output_targets = tau_mes                    
             
-            # 输出保持不变：力矩
-            output_targets = tau_mes                    # (N, 7)
-            
-            # 5. 将这个 rollout 的数据添加到总列表中
             all_input_features.append(input_features)
             all_output_targets.append(output_targets)
         
-        # 6. 将4个 rollout 的数据垂直堆叠 (stack) 成一个巨大的数据集
         if not all_input_features:
-            print("错误：没有从 rollouts 中提取到任何数据。")
+            print("错误：(Part 1) 没有从 rollouts 中提取到任何数据。")
             return None, None
             
         final_input_features = np.vstack(all_input_features)
@@ -64,21 +60,51 @@ class DatasetPreparator:
         
         return final_input_features, final_output_targets
     
-    # --- 这是你原来的 Part 2 函数, 它也需要用同样的方式修改 ---
+    # --- Part 2 函数 (最终版) ---
     @staticmethod
     def extract_trajectory_prediction_features_and_targets(loaded_rollouts: List[Rollout]):
         
-        print("警告: extract_trajectory_prediction_features_and_targets (for Part 2) 尚未适配。")
-        print("它需要的数据 (q_des, qd_des) 同样在 .pkl 文件中缺失。")
+        all_input_features = []
+        all_output_targets = []
+
+        for rollout in loaded_rollouts:
+            
+            # --- 提取 Part 2 所需数据 ---
+            # (这是我们修复 data_generator 后才有的数据)
+            
+            # Part 2 输入 [cite: 70, 73]
+            measured_joint_positions = np.array(rollout.q_mes_all)
+            final_target_cartesian_positions = np.array(rollout.final_target_pos_all) 
+            
+            # Part 2 输出 [cite: 72]
+            desired_joint_positions = np.array(rollout.q_d_all)
+            desired_joint_velocities = np.array(rollout.qd_d_all)
+            
+            # --- 定义 Part 2 特征 (符合 PDF 要求) ---
+            # (N, 7) + (N, 3) -> (N, 10)
+            input_features = np.concatenate([measured_joint_positions, final_target_cartesian_positions], axis=1)
+            
+            # (N, 7) + (N, 7) -> (N, 14)
+            output_targets = np.concatenate([desired_joint_positions, desired_joint_velocities], axis=1)
+            
+            all_input_features.append(input_features)
+            all_output_targets.append(output_targets)
+            
+        if not all_input_features:
+            print("错误：(Part 2) 没有从 rollouts 中提取到任何数据。")
+            return None, None
+            
+        final_input_features = np.vstack(all_input_features)
+        final_output_targets = np.vstack(all_output_targets)
         
-        # 暂时返回空值，以避免你的旧代码出错
-        return np.array([]), np.array([]) 
+        return final_input_features, final_output_targets
     
     @staticmethod
     def split_concatenated_output_into_positions_and_velocities(concatenated_output, number_of_joints):
         
-        desired_joint_positions = concatenated_output[:number_of_joints]
-        desired_joint_velocities = concatenated_output[number_of_joints:]
+        # ... (这个函数保持原样, 它是完美的) ...
+        desired_joint_positions = concatenated_output[:, :number_of_joints]
+        desired_joint_velocities = concatenated_output[:, number_of_joints:]
         
         return desired_joint_positions, desired_joint_velocities
 
